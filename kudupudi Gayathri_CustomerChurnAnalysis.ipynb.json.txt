@@ -1,0 +1,557 @@
+{
+  "cells": [
+    {
+      "cell_type": "markdown",
+      "metadata": {},
+      "source": [
+        "# Customer Churn Analysis and Prediction Using Data Analytics and AI\n",
+        "\n",
+        "**IBM SkillsBuild Data Analytics with AI Academic Internship Project**\n",
+        "\n",
+        "### Project objective\n",
+        "Analyze telecom customer data, identify factors associated with customer churn, visualize important patterns, and build machine-learning models to predict whether a customer is likely to churn.\n",
+        "\n",
+        "**Dataset:** IBM Telco Customer Churn sample dataset  \n",
+        "**Rows:** 7,043 customers  \n",
+        "**Original columns:** 21  \n",
+        "**Target:** `Churn` (`Yes` / `No`)\n",
+        "\n",
+        "> This notebook is designed to be reproducible. If the CSV is not present locally, it downloads the public IBM sample dataset automatically.\n"
+      ]
+    },
+    {
+      "cell_type": "markdown",
+      "metadata": {},
+      "source": [
+        "## 1. Import Libraries and Set Up the Environment"
+      ]
+    },
+    {
+      "cell_type": "code",
+      "execution_count": null,
+      "metadata": {},
+      "outputs": [],
+      "source": [
+        "import warnings\n",
+        "warnings.filterwarnings(\"ignore\")\n",
+        "\n",
+        "from pathlib import Path\n",
+        "from urllib.request import urlopen\n",
+        "\n",
+        "import numpy as np\n",
+        "import pandas as pd\n",
+        "import matplotlib.pyplot as plt\n",
+        "import seaborn as sns\n",
+        "\n",
+        "from sklearn.model_selection import train_test_split\n",
+        "from sklearn.compose import ColumnTransformer\n",
+        "from sklearn.pipeline import Pipeline\n",
+        "from sklearn.preprocessing import OneHotEncoder, StandardScaler\n",
+        "from sklearn.impute import SimpleImputer\n",
+        "from sklearn.linear_model import LogisticRegression\n",
+        "from sklearn.ensemble import RandomForestClassifier\n",
+        "from sklearn.metrics import (\n",
+        "    accuracy_score, precision_score, recall_score, f1_score,\n",
+        "    roc_auc_score, confusion_matrix, classification_report,\n",
+        "    RocCurveDisplay\n",
+        ")\n",
+        "\n",
+        "RANDOM_STATE = 42\n",
+        "pd.set_option(\"display.max_columns\", None)\n",
+        "sns.set_theme(style=\"whitegrid\")\n"
+      ]
+    },
+    {
+      "cell_type": "markdown",
+      "metadata": {},
+      "source": [
+        "## 2. Load the Dataset\n",
+        "\n",
+        "The source is the public IBM Telco Customer Churn sample dataset. IBM describes the data as a fictional telecommunications customer dataset containing customer demographics, services, billing information, and a churn outcome.\n"
+      ]
+    },
+    {
+      "cell_type": "code",
+      "execution_count": null,
+      "metadata": {},
+      "outputs": [],
+      "source": [
+        "DATA_DIR = Path(\"data\")\n",
+        "DATA_DIR.mkdir(exist_ok=True)\n",
+        "\n",
+        "DATA_PATH = DATA_DIR / \"Telco-Customer-Churn.csv\"\n",
+        "DATA_URL = \"https://raw.githubusercontent.com/IBM/telco-customer-churn-on-icp4d/master/data/Telco-Customer-Churn.csv\"\n",
+        "\n",
+        "if not DATA_PATH.exists():\n",
+        "    print(\"Dataset not found locally. Downloading from the public IBM sample-data repository...\")\n",
+        "    with urlopen(DATA_URL, timeout=30) as response:\n",
+        "        DATA_PATH.write_bytes(response.read())\n",
+        "\n",
+        "df = pd.read_csv(DATA_PATH)\n",
+        "\n",
+        "print(f\"Dataset shape: {df.shape}\")\n",
+        "display(df.head())\n"
+      ]
+    },
+    {
+      "cell_type": "markdown",
+      "metadata": {},
+      "source": [
+        "## 3. Initial Data Inspection"
+      ]
+    },
+    {
+      "cell_type": "code",
+      "execution_count": null,
+      "metadata": {},
+      "outputs": [],
+      "source": [
+        "print(\"Data types:\")\n",
+        "display(df.dtypes.to_frame(\"dtype\"))\n",
+        "\n",
+        "print(\"\\nMissing values:\")\n",
+        "display(df.isna().sum().sort_values(ascending=False).to_frame(\"missing\"))\n",
+        "\n",
+        "print(\"\\nDuplicate customer IDs:\", df[\"customerID\"].duplicated().sum())\n",
+        "\n",
+        "print(\"\\nTarget distribution:\")\n",
+        "display(df[\"Churn\"].value_counts().to_frame(\"count\"))\n",
+        "display((df[\"Churn\"].value_counts(normalize=True) * 100).round(2).to_frame(\"percentage\"))\n"
+      ]
+    },
+    {
+      "cell_type": "markdown",
+      "metadata": {},
+      "source": [
+        "## 4. Data Cleaning\n",
+        "\n",
+        "`TotalCharges` can contain blank strings for customers with very short tenure. These values are converted to numeric, with invalid/blank values represented as missing values and then handled by the preprocessing pipeline.\n"
+      ]
+    },
+    {
+      "cell_type": "code",
+      "execution_count": null,
+      "metadata": {},
+      "outputs": [],
+      "source": [
+        "df = df.copy()\n",
+        "\n",
+        "# Convert TotalCharges to numeric; invalid/blank values become NaN.\n",
+        "df[\"TotalCharges\"] = pd.to_numeric(df[\"TotalCharges\"], errors=\"coerce\")\n",
+        "\n",
+        "# Remove duplicate customer records if any are present.\n",
+        "df = df.drop_duplicates(subset=\"customerID\").reset_index(drop=True)\n",
+        "\n",
+        "# Target encoding.\n",
+        "df[\"ChurnFlag\"] = df[\"Churn\"].map({\"No\": 0, \"Yes\": 1})\n",
+        "\n",
+        "print(\"Shape after cleaning:\", df.shape)\n",
+        "print(\"Missing TotalCharges:\", df[\"TotalCharges\"].isna().sum())\n",
+        "display(df.describe(include=\"all\").T.head(25))\n"
+      ]
+    },
+    {
+      "cell_type": "markdown",
+      "metadata": {},
+      "source": [
+        "## 5. Exploratory Data Analysis\n",
+        "\n",
+        "The following charts examine churn overall and across contract type, internet service, payment method, tenure, and monthly charges.\n"
+      ]
+    },
+    {
+      "cell_type": "code",
+      "execution_count": null,
+      "metadata": {},
+      "outputs": [],
+      "source": [
+        "# Overall churn distribution\n",
+        "plt.figure(figsize=(6, 4))\n",
+        "sns.countplot(data=df, x=\"Churn\")\n",
+        "plt.title(\"Customer Churn Distribution\")\n",
+        "plt.xlabel(\"Churn\")\n",
+        "plt.ylabel(\"Number of Customers\")\n",
+        "plt.show()\n",
+        "\n",
+        "# Churn rate by contract\n",
+        "contract_rate = (\n",
+        "    df.groupby(\"Contract\")[\"ChurnFlag\"]\n",
+        "      .mean()\n",
+        "      .sort_values(ascending=False)\n",
+        "      .mul(100)\n",
+        ")\n",
+        "\n",
+        "plt.figure(figsize=(8, 4))\n",
+        "contract_rate.plot(kind=\"bar\")\n",
+        "plt.title(\"Churn Rate by Contract Type\")\n",
+        "plt.xlabel(\"Contract\")\n",
+        "plt.ylabel(\"Churn Rate (%)\")\n",
+        "plt.xticks(rotation=0)\n",
+        "plt.show()\n",
+        "\n",
+        "# Churn rate by internet service\n",
+        "internet_rate = (\n",
+        "    df.groupby(\"InternetService\")[\"ChurnFlag\"]\n",
+        "      .mean()\n",
+        "      .sort_values(ascending=False)\n",
+        "      .mul(100)\n",
+        ")\n",
+        "\n",
+        "plt.figure(figsize=(8, 4))\n",
+        "internet_rate.plot(kind=\"bar\")\n",
+        "plt.title(\"Churn Rate by Internet Service\")\n",
+        "plt.xlabel(\"Internet Service\")\n",
+        "plt.ylabel(\"Churn Rate (%)\")\n",
+        "plt.xticks(rotation=0)\n",
+        "plt.show()\n",
+        "\n",
+        "# Churn rate by payment method\n",
+        "payment_rate = (\n",
+        "    df.groupby(\"PaymentMethod\")[\"ChurnFlag\"]\n",
+        "      .mean()\n",
+        "      .sort_values(ascending=False)\n",
+        "      .mul(100)\n",
+        ")\n",
+        "\n",
+        "plt.figure(figsize=(9, 4))\n",
+        "payment_rate.plot(kind=\"bar\")\n",
+        "plt.title(\"Churn Rate by Payment Method\")\n",
+        "plt.xlabel(\"Payment Method\")\n",
+        "plt.ylabel(\"Churn Rate (%)\")\n",
+        "plt.xticks(rotation=30, ha=\"right\")\n",
+        "plt.show()\n",
+        "\n",
+        "# Tenure distribution by churn\n",
+        "plt.figure(figsize=(8, 4))\n",
+        "sns.histplot(data=df, x=\"tenure\", hue=\"Churn\", bins=30, multiple=\"stack\")\n",
+        "plt.title(\"Tenure Distribution by Churn\")\n",
+        "plt.xlabel(\"Tenure (months)\")\n",
+        "plt.ylabel(\"Customers\")\n",
+        "plt.show()\n",
+        "\n",
+        "# Monthly charges by churn\n",
+        "plt.figure(figsize=(8, 4))\n",
+        "sns.boxplot(data=df, x=\"Churn\", y=\"MonthlyCharges\")\n",
+        "plt.title(\"Monthly Charges by Churn\")\n",
+        "plt.xlabel(\"Churn\")\n",
+        "plt.ylabel(\"Monthly Charges\")\n",
+        "plt.show()\n"
+      ]
+    },
+    {
+      "cell_type": "markdown",
+      "metadata": {},
+      "source": [
+        "## 6. Feature Engineering\n",
+        "\n",
+        "The customer ID is an identifier and is excluded from modelling. `Churn` is the target. The remaining demographic, service, contract, and billing variables are used as predictors.\n"
+      ]
+    },
+    {
+      "cell_type": "code",
+      "execution_count": null,
+      "metadata": {},
+      "outputs": [],
+      "source": [
+        "X = df.drop(columns=[\"Churn\", \"ChurnFlag\", \"customerID\"])\n",
+        "y = df[\"ChurnFlag\"]\n",
+        "\n",
+        "categorical_features = X.select_dtypes(include=[\"object\"]).columns.tolist()\n",
+        "numeric_features = X.select_dtypes(exclude=[\"object\"]).columns.tolist()\n",
+        "\n",
+        "print(\"Categorical features:\", categorical_features)\n",
+        "print(\"Numeric features:\", numeric_features)\n"
+      ]
+    },
+    {
+      "cell_type": "markdown",
+      "metadata": {},
+      "source": [
+        "## 7. Train-Test Split\n",
+        "\n",
+        "A stratified split is used so the proportion of churned customers remains similar in the training and test sets.\n"
+      ]
+    },
+    {
+      "cell_type": "code",
+      "execution_count": null,
+      "metadata": {},
+      "outputs": [],
+      "source": [
+        "X_train, X_test, y_train, y_test = train_test_split(\n",
+        "    X, y,\n",
+        "    test_size=0.20,\n",
+        "    random_state=RANDOM_STATE,\n",
+        "    stratify=y\n",
+        ")\n",
+        "\n",
+        "print(\"Training rows:\", len(X_train))\n",
+        "print(\"Test rows:\", len(X_test))\n"
+      ]
+    },
+    {
+      "cell_type": "markdown",
+      "metadata": {},
+      "source": [
+        "## 8. Preprocessing Pipeline\n",
+        "\n",
+        "Categorical variables are one-hot encoded and numeric variables are imputed and standardized. Keeping preprocessing inside a pipeline helps prevent data leakage.\n"
+      ]
+    },
+    {
+      "cell_type": "code",
+      "execution_count": null,
+      "metadata": {},
+      "outputs": [],
+      "source": [
+        "numeric_transformer = Pipeline(steps=[\n",
+        "    (\"imputer\", SimpleImputer(strategy=\"median\")),\n",
+        "    (\"scaler\", StandardScaler())\n",
+        "])\n",
+        "\n",
+        "categorical_transformer = Pipeline(steps=[\n",
+        "    (\"imputer\", SimpleImputer(strategy=\"most_frequent\")),\n",
+        "    (\"onehot\", OneHotEncoder(handle_unknown=\"ignore\"))\n",
+        "])\n",
+        "\n",
+        "preprocessor = ColumnTransformer(\n",
+        "    transformers=[\n",
+        "        (\"num\", numeric_transformer, numeric_features),\n",
+        "        (\"cat\", categorical_transformer, categorical_features)\n",
+        "    ]\n",
+        ")\n"
+      ]
+    },
+    {
+      "cell_type": "markdown",
+      "metadata": {},
+      "source": [
+        "## 9. Model Training\n",
+        "\n",
+        "Two classification models are trained:\n",
+        "\n",
+        "1. **Logistic Regression** \u2014 a transparent baseline model.\n",
+        "2. **Random Forest** \u2014 a nonlinear ensemble model capable of capturing interactions between variables.\n"
+      ]
+    },
+    {
+      "cell_type": "code",
+      "execution_count": null,
+      "metadata": {},
+      "outputs": [],
+      "source": [
+        "models = {\n",
+        "    \"Logistic Regression\": LogisticRegression(\n",
+        "        max_iter=2000,\n",
+        "        class_weight=\"balanced\",\n",
+        "        random_state=RANDOM_STATE\n",
+        "    ),\n",
+        "    \"Random Forest\": RandomForestClassifier(\n",
+        "        n_estimators=300,\n",
+        "        max_depth=12,\n",
+        "        min_samples_leaf=3,\n",
+        "        class_weight=\"balanced\",\n",
+        "        random_state=RANDOM_STATE,\n",
+        "        n_jobs=-1\n",
+        "    )\n",
+        "}\n",
+        "\n",
+        "results = []\n",
+        "fitted_models = {}\n",
+        "\n",
+        "for name, model in models.items():\n",
+        "    pipe = Pipeline(steps=[\n",
+        "        (\"preprocessor\", preprocessor),\n",
+        "        (\"model\", model)\n",
+        "    ])\n",
+        "    pipe.fit(X_train, y_train)\n",
+        "\n",
+        "    y_pred = pipe.predict(X_test)\n",
+        "    y_prob = pipe.predict_proba(X_test)[:, 1]\n",
+        "\n",
+        "    results.append({\n",
+        "        \"Model\": name,\n",
+        "        \"Accuracy\": accuracy_score(y_test, y_pred),\n",
+        "        \"Precision\": precision_score(y_test, y_pred, zero_division=0),\n",
+        "        \"Recall\": recall_score(y_test, y_pred, zero_division=0),\n",
+        "        \"F1\": f1_score(y_test, y_pred, zero_division=0),\n",
+        "        \"ROC-AUC\": roc_auc_score(y_test, y_prob)\n",
+        "    })\n",
+        "    fitted_models[name] = pipe\n",
+        "\n",
+        "results_df = pd.DataFrame(results).sort_values(\"ROC-AUC\", ascending=False)\n",
+        "display(results_df.round(4))\n"
+      ]
+    },
+    {
+      "cell_type": "markdown",
+      "metadata": {},
+      "source": [
+        "## 10. Detailed Evaluation\n",
+        "\n",
+        "The model with the highest ROC-AUC in the test set is selected for the remaining analysis. The notebook reports a classification report, confusion matrix, and ROC curve.\n"
+      ]
+    },
+    {
+      "cell_type": "code",
+      "execution_count": null,
+      "metadata": {},
+      "outputs": [],
+      "source": [
+        "best_model_name = results_df.iloc[0][\"Model\"]\n",
+        "best_model = fitted_models[best_model_name]\n",
+        "\n",
+        "best_pred = best_model.predict(X_test)\n",
+        "best_prob = best_model.predict_proba(X_test)[:, 1]\n",
+        "\n",
+        "print(\"Selected model:\", best_model_name)\n",
+        "print(\"\\nClassification report:\")\n",
+        "print(classification_report(y_test, best_pred, target_names=[\"No Churn\", \"Churn\"]))\n",
+        "\n",
+        "cm = confusion_matrix(y_test, best_pred)\n",
+        "plt.figure(figsize=(5, 4))\n",
+        "sns.heatmap(\n",
+        "    cm, annot=True, fmt=\"d\", cmap=\"Blues\",\n",
+        "    xticklabels=[\"No Churn\", \"Churn\"],\n",
+        "    yticklabels=[\"No Churn\", \"Churn\"]\n",
+        ")\n",
+        "plt.title(f\"Confusion Matrix - {best_model_name}\")\n",
+        "plt.xlabel(\"Predicted\")\n",
+        "plt.ylabel(\"Actual\")\n",
+        "plt.show()\n",
+        "\n",
+        "RocCurveDisplay.from_predictions(y_test, best_prob)\n",
+        "plt.title(f\"ROC Curve - {best_model_name}\")\n",
+        "plt.show()\n"
+      ]
+    },
+    {
+      "cell_type": "markdown",
+      "metadata": {},
+      "source": [
+        "## 11. Model Interpretation\n",
+        "\n",
+        "For the logistic regression model, coefficients can be inspected after one-hot encoding. Positive coefficients indicate features associated with higher predicted churn probability, while negative coefficients indicate lower predicted churn probability within the fitted model.\n",
+        "\n",
+        "For the Random Forest model, feature importance is calculated from the fitted tree ensemble.\n"
+      ]
+    },
+    {
+      "cell_type": "code",
+      "execution_count": null,
+      "metadata": {},
+      "outputs": [],
+      "source": [
+        "# Logistic regression coefficients\n",
+        "lr_pipe = fitted_models[\"Logistic Regression\"]\n",
+        "lr_preprocessor = lr_pipe.named_steps[\"preprocessor\"]\n",
+        "lr_model = lr_pipe.named_steps[\"model\"]\n",
+        "\n",
+        "feature_names = lr_preprocessor.get_feature_names_out()\n",
+        "lr_importance = pd.Series(lr_model.coef_[0], index=feature_names).sort_values()\n",
+        "\n",
+        "print(\"Logistic Regression features most associated with lower churn:\")\n",
+        "display(lr_importance.head(10).to_frame(\"coefficient\"))\n",
+        "\n",
+        "print(\"Logistic Regression features most associated with higher churn:\")\n",
+        "display(lr_importance.tail(10).sort_values(ascending=False).to_frame(\"coefficient\"))\n",
+        "\n",
+        "# Random Forest feature importance\n",
+        "rf_pipe = fitted_models[\"Random Forest\"]\n",
+        "rf_preprocessor = rf_pipe.named_steps[\"preprocessor\"]\n",
+        "rf_model = rf_pipe.named_steps[\"model\"]\n",
+        "\n",
+        "rf_features = rf_preprocessor.get_feature_names_out()\n",
+        "rf_importance = pd.Series(rf_model.feature_importances_, index=rf_features).sort_values(ascending=False)\n",
+        "\n",
+        "plt.figure(figsize=(9, 6))\n",
+        "rf_importance.head(15).sort_values().plot(kind=\"barh\")\n",
+        "plt.title(\"Top Random Forest Feature Importances\")\n",
+        "plt.xlabel(\"Importance\")\n",
+        "plt.ylabel(\"Feature\")\n",
+        "plt.show()\n"
+      ]
+    },
+    {
+      "cell_type": "markdown",
+      "metadata": {},
+      "source": [
+        "## 12. Customer Risk Scoring\n",
+        "\n",
+        "The selected model is used to calculate a churn probability for every customer. Customers are then grouped into simple risk bands for analytical prioritization.\n",
+        "\n",
+        "These risk bands are **not causal conclusions** and should not be treated as proof that a customer will churn.\n"
+      ]
+    },
+    {
+      "cell_type": "code",
+      "execution_count": null,
+      "metadata": {},
+      "outputs": [],
+      "source": [
+        "all_features = df.drop(columns=[\"Churn\", \"ChurnFlag\", \"customerID\"])\n",
+        "all_prob = best_model.predict_proba(all_features)[:, 1]\n",
+        "\n",
+        "risk_output = df[[\"customerID\", \"Contract\", \"tenure\", \"MonthlyCharges\", \"Churn\"]].copy()\n",
+        "risk_output[\"ChurnProbability\"] = all_prob\n",
+        "risk_output[\"RiskBand\"] = pd.cut(\n",
+        "    risk_output[\"ChurnProbability\"],\n",
+        "    bins=[-np.inf, 0.30, 0.60, np.inf],\n",
+        "    labels=[\"Low\", \"Medium\", \"High\"]\n",
+        ")\n",
+        "\n",
+        "risk_output = risk_output.sort_values(\"ChurnProbability\", ascending=False)\n",
+        "\n",
+        "display(risk_output.head(20))\n",
+        "\n",
+        "risk_output.to_csv(\"customer_churn_risk_predictions.csv\", index=False)\n",
+        "print(\"Saved: customer_churn_risk_predictions.csv\")\n"
+      ]
+    },
+    {
+      "cell_type": "markdown",
+      "metadata": {},
+      "source": [
+        "## 13. Key Findings to Review After Running the Notebook\n",
+        "\n",
+        "The notebook automatically calculates the relevant statistics. In the final report, discuss:\n",
+        "\n",
+        "- Overall churn distribution.\n",
+        "- Which contract types have higher or lower churn rates.\n",
+        "- Differences across internet service and payment methods.\n",
+        "- How tenure relates to churn.\n",
+        "- How monthly charges differ between churned and retained customers.\n",
+        "- Which model performs better on the held-out test set.\n",
+        "- Which variables are most influential in the fitted models.\n",
+        "- How a risk-scoring workflow could help a retention team prioritize customers.\n",
+        "\n",
+        "### Important limitation\n",
+        "This dataset is a cross-sectional sample. The model identifies statistical associations in the available snapshot; it does not establish that a particular business action will cause a customer to remain with the company.\n"
+      ]
+    },
+    {
+      "cell_type": "markdown",
+      "metadata": {},
+      "source": [
+        "## 14. Conclusion\n",
+        "\n",
+        "This project demonstrates an end-to-end data analytics and AI workflow: data acquisition, data cleaning, exploratory analysis, feature preprocessing, machine-learning classification, evaluation, model interpretation, and customer risk scoring.\n",
+        "\n",
+        "The analysis can be extended with hyperparameter tuning, cross-validation, calibration, cost-sensitive threshold selection, dashboard development, and periodic retraining on new customer snapshots.\n"
+      ]
+    }
+  ],
+  "metadata": {
+    "kernelspec": {
+      "display_name": "Python 3",
+      "language": "python",
+      "name": "python3"
+    },
+    "language_info": {
+      "name": "python",
+      "version": "3.x"
+    }
+  },
+  "nbformat": 4,
+  "nbformat_minor": 5
+}
